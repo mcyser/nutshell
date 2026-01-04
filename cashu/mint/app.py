@@ -14,6 +14,7 @@ from ..core.errors import CashuError
 from ..core.logging import configure_logger
 from ..core.settings import settings
 from .auth.router import auth_router
+from .admin_router import router as admin_router
 from .router import redis, router
 from .router_deprecated import router_deprecated
 from .startup import (
@@ -124,3 +125,5 @@ else:
 
 if settings.mint_require_auth:
     app.include_router(auth_router, tags=["Auth"])
+
+app.include_router(admin_router)

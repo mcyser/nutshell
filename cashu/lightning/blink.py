@@ -57,7 +57,7 @@ class BlinkWallet(LightningBackend):
     wallet_ids: Dict[Unit, str] = {}
     endpoint = "https://api.blink.sv/graphql"
 
-    supported_units = {Unit.sat, Unit.msat}
+    supported_units = {Unit.sat, Unit.msat, Unit.tlts}
     supports_description: bool = True
     unit = Unit.sat
 
@@ -115,6 +115,40 @@ class BlinkWallet(LightningBackend):
 
         return StatusResponse(error_message=None, balance=Amount(self.unit, balance))
 
+    async def _get_rate_tlts_to_sats(self, amount_tlts: int) -> int:
+        """Convert Amount (Tlts/COP) to Sats using Yadio."""
+        try:
+            async with httpx.AsyncClient() as client:
+                # 1 Tlt = 1 COP
+                resp = await client.get(
+                    f"https://api.yadio.io/convert/{amount_tlts}/COP/BTC", timeout=10.0
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                btc_val = data["result"]
+                sats = int(btc_val * 1e8)
+                return sats
+        except Exception as e:
+            logger.error(f"Price Oracle Failed (Tlts -> Sats): {e}")
+            raise e
+
+    async def _get_rate_sats_to_tlts(self, amount_sats: int) -> int:
+        """Convert Sats to Tlts (COP) using Yadio."""
+        try:
+            async with httpx.AsyncClient() as client:
+                amount_btc = amount_sats / 1e8
+                # Use a larger amount to get better precision if needed, but endpoint supports float
+                resp = await client.get(
+                    f"https://api.yadio.io/convert/{amount_btc}/BTC/COP", timeout=10.0
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                cop_val = data["result"]
+                return int(math.ceil(cop_val))
+        except Exception as e:
+            logger.error(f"Price Oracle Failed (Sats -> Tlts): {e}")
+            raise e
+
     async def create_invoice(
         self,
         amount: Amount,
@@ -130,6 +164,10 @@ class BlinkWallet(LightningBackend):
                 "recipientWalletId": self.wallet_ids[Unit.sat],
             }
         }
+        if self.unit == Unit.tlts:
+            sats_amount = await self._get_rate_tlts_to_sats(amount.amount)
+            variables["input"]["amount"] = str(sats_amount)
+
         if description_hash:
             variables["input"]["descriptionHash"] = description_hash.hex()
         if memo:
@@ -475,6 +513,18 @@ class BlinkWallet(LightningBackend):
 
         fees = Amount(unit=Unit.msat, amount=fees_msat)
         amount = Amount(unit=Unit.msat, amount=amount_msat)
+
+        if self.unit == Unit.tlts:
+            # Convert fees (msat -> tlts)
+            fees_sats = math.ceil(fees.to(Unit.sat).amount)
+            fees_tlts = await self._get_rate_sats_to_tlts(fees_sats)
+            fees = Amount(unit=Unit.tlts, amount=fees_tlts)
+
+            # Convert amount (msat -> tlts)
+            amount_sats = math.ceil(amount.to(Unit.sat).amount)
+            amount_tlts = await self._get_rate_sats_to_tlts(amount_sats)
+            amount = Amount(unit=Unit.tlts, amount=amount_tlts)
+
         return PaymentQuoteResponse(
             checking_id=bolt11,
             fee=fees.to(self.unit, round="up"),

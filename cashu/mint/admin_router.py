@@ -9,7 +9,7 @@ from loguru import logger
 
 from ..core.settings import settings
 from ..mint.startup import ledger
-from ..core.models import MintQuoteState
+from ..core.base import MintQuoteState
 
 router = APIRouter()
 

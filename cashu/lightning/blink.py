@@ -95,6 +95,12 @@ class BlinkWallet(LightningBackend):
 
         try:
             resp: dict = r.json()
+            if "errors" in resp:
+                logger.error(f"Blink API returned errors: {resp['errors']}")
+                return StatusResponse(
+                    error_message=f"Blink API error: {resp['errors'][0].get('message')}",
+                    balance=Amount(self.unit, 0),
+                )
         except Exception:
             return StatusResponse(
                 error_message=(
@@ -103,10 +109,16 @@ class BlinkWallet(LightningBackend):
                 balance=Amount(self.unit, 0),
             )
 
+        me = resp.get("data", {}).get("me")
+        if not me:
+            return StatusResponse(
+                error_message="Blink API returned no user data. Check your MINT_BLINK_KEY.",
+                balance=Amount(self.unit, 0),
+            )
+
+        wallets = me.get("defaultAccount", {}).get("wallets", [])
         balance = 0
-        for wallet_dict in (
-            resp.get("data", {}).get("me", {}).get("defaultAccount", {}).get("wallets")
-        ):
+        for wallet_dict in wallets:
             if wallet_dict.get("walletCurrency") == "USD":
                 self.wallet_ids[Unit.usd] = wallet_dict["id"]  # type: ignore
             elif wallet_dict.get("walletCurrency") == "BTC":
